@@ -70,6 +70,7 @@ app.get('/api/members', async (req, res) => {
   }
 });
 
+// Active Loans List
 app.get('/api/loans', async (req, res) => {
   try {
     const loans = await db('loans')
@@ -80,14 +81,39 @@ app.get('/api/loans', async (req, res) => {
         'loans.loan_id as id',
         'books.title',
         'book_copies.barcode',
+        'book_copies.copy_id as copyId',
         'users.full_name as memberName',
         'users.membership_no as membershipNo',
         'loans.issue_date as issueDate',
         'loans.due_date as dueDate',
         'loans.return_date as returnDate',
         'loans.status'
-      );
+      )
+      .orderBy('loans.loan_id', 'desc');
     res.json(loans);
+  } catch (err) {
+    res.status(500).json({ error: { code: 'INTERNAL', message: err.message } });
+  }
+});
+
+// Return Book Endpoint
+app.patch('/api/loans/:id/return', async (req, res) => {
+  const loanId = req.params.id;
+  try {
+    const loan = await db('loans').where({ loan_id: loanId }).first();
+    if (!loan) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Loan record not found' } });
+
+    // Update loan status and mark copy as Available
+    await db('loans').where({ loan_id: loanId }).update({
+      status: 'Returned',
+      return_date: db.fn.now(),
+    });
+
+    await db('book_copies').where({ copy_id: loan.copy_id }).update({
+      status: 'Available',
+    });
+
+    res.json({ success: true, message: 'Book marked as returned' });
   } catch (err) {
     res.status(500).json({ error: { code: 'INTERNAL', message: err.message } });
   }
@@ -119,6 +145,7 @@ app.get('/api/fines', async (req, res) => {
       .select(
         'fines.fine_id as id',
         'users.full_name as memberName',
+        'users.phone as memberPhone',
         'fines.amount',
         'fines.days_overdue as daysOverdue',
         'fines.status',
@@ -148,7 +175,6 @@ app.get('/api/stats', async (req, res) => {
   }
 });
 
-// Users and Roles List
 app.get('/api/users', async (req, res) => {
   try {
     const users = await db('users')
@@ -170,7 +196,6 @@ app.get('/api/users', async (req, res) => {
   }
 });
 
-// Update User Role
 app.patch('/api/users/:id/role', async (req, res) => {
   try {
     const { roleId } = req.body;
@@ -181,7 +206,6 @@ app.patch('/api/users/:id/role', async (req, res) => {
   }
 });
 
-// Audit Logs Endpoint
 app.get('/api/audit-logs', async (req, res) => {
   try {
     const logs = await db('audit_logs')
@@ -201,7 +225,6 @@ app.get('/api/audit-logs', async (req, res) => {
   }
 });
 
-// Reports Endpoint
 app.get('/api/reports', async (req, res) => {
   try {
     const popularBooks = await db('loans')
