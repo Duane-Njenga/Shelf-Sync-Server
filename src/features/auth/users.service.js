@@ -4,8 +4,21 @@ export async function createUser(trx, { fullName, email, phone, password, roleNa
   const role = await trx('roles').where({ role_name: roleName }).first();
   if (!role) throw new Error(`Role ${roleName} not found`);
 
-  const userCount = await trx('users').count('user_id as count').first();
-  const membershipNo = `MEM${String(Number(userCount.count) + 1).padStart(3, '0')}`;
+  // Fetch the latest membership number to derive the next number safely
+  const lastUser = await trx('users')
+    .where('membership_no', 'like', 'MEM%')
+    .orderBy('user_id', 'desc')
+    .first();
+
+  let nextNum = 1;
+  if (lastUser && lastUser.membership_no) {
+    const parsed = parseInt(lastUser.membership_no.replace('MEM', ''), 10);
+    if (!isNaN(parsed)) {
+      nextNum = parsed + 1;
+    }
+  }
+
+  const membershipNo = `MEM${String(nextNum).padStart(3, '0')}`;
   const passwordHash = await bcrypt.hash(password, 10);
 
   const [userId] = await trx('users').insert({
