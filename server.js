@@ -7,7 +7,7 @@ import { db } from './src/db.js';
 import { logAudit } from './src/utils/audit.js';
 
 import authRouter from './src/routes/auth_routes.js';
-import booksRouter from './src/routes/books_routes.js';
+import booksRouter from './src/routes/book_routes.js';
 import mpesaRouter from './src/routes/mpesa_routes.js';
 
 dotenv.config();
