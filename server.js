@@ -549,17 +549,21 @@ app.get('/api/audit-logs', async (req, res) => {
   try {
     const logs = await db('audit_logs')
       .leftJoin('users', 'audit_logs.user_id', 'users.user_id')
-      .select(
-        'audit_logs.log_id as id',
-        'users.full_name as performer',
-        'audit_logs.action',
-        db.raw('COALESCE(audit_logs.table_affected, audit_logs.target_table) as target'),
-        db.raw('COALESCE(audit_logs.details, CONCAT("Record ID: ", audit_logs.record_id)) as details'),
-        'audit_logs.created_at as createdAt'
-      )
+      .select('audit_logs.*', 'users.full_name as performer')
       .orderBy('audit_logs.log_id', 'desc');
-    res.json(logs);
+
+    const formatted = logs.map((l) => ({
+      id: l.log_id ?? l.id,
+      performer: l.performer || 'System',
+      action: l.action || 'UNKNOWN',
+      target: l.table_affected || l.target_table || 'N/A',
+      details: l.details || (l.record_id ? `Record ID: ${l.record_id}` : 'N/A'),
+      createdAt: l.created_at || l.timestamp || null,
+    }));
+
+    res.json(formatted);
   } catch (err) {
+    console.error('GET /api/audit-logs error:', err);
     res.status(500).json({ error: { code: 'INTERNAL', message: err.message } });
   }
 });
