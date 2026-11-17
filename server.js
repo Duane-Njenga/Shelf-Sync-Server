@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
 import express from 'express';
+import cors from 'cors';
 import session from 'express-session';
 import MySQLStore from 'express-mysql-session';
 import { db } from './src/db.js';
@@ -7,10 +8,26 @@ import { logAudit } from './src/utils/audit.js';
 
 import authRouter from './src/routes/auth_routes.js';
 import booksRouter from './src/routes/book_routes.js';
+import mpesaRouter from './src/routes/mpesa_routes.js';
 
 dotenv.config();
 
 const app = express();
+const isProd = process.env.NODE_ENV === 'production';
+
+// Trust Render/Cloud reverse proxy so secure cookies work
+if (isProd) {
+  app.set('trust proxy', 1);
+}
+
+// Allow Vercel frontend to send session cookies
+app.use(
+  cors({
+    origin: process.env.CLIENT_URL || 'http://localhost:3000',
+    credentials: true,
+  })
+);
+
 app.use(express.json());
 
 const MySQLStoreSession = MySQLStore(session);
@@ -20,6 +37,7 @@ const sessionStore = new MySQLStoreSession({
   user: process.env.DB_USER || 'root',
   password: process.env.DB_PASSWORD || '',
   database: process.env.DB_NAME || 'shelfsync_db',
+  ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
   createDatabaseTable: true,
 });
 
@@ -32,6 +50,8 @@ app.use(
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
+      secure: isProd,
+      sameSite: isProd ? 'none' : 'lax',
       maxAge: 1000 * 60 * 60 * 24,
     },
   })
@@ -41,6 +61,7 @@ app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
 app.use('/api/auth', authRouter);
 app.use('/api/books', booksRouter);
+app.use('/api/mpesa', mpesaRouter);
 
 app.get('/api/categories', async (req, res) => {
   try {
@@ -141,7 +162,7 @@ app.get('/api/loans', async (req, res) => {
   }
 });
 
-// Return Book Endpoint
+// Return Book Endpoint (automatically creates an Unpaid fine of KES 10/day if overdue)
 app.patch('/api/loans/:id/return', async (req, res) => {
   const loanId = req.params.id;
   try {
@@ -155,6 +176,26 @@ app.patch('/api/loans/:id/return', async (req, res) => {
 
     if (loan.copy_id) {
       await db('book_copies').where({ copy_id: loan.copy_id }).update({ status: 'Available' });
+    }
+
+    if (loan.due_date) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const due = new Date(loan.due_date);
+      due.setHours(0, 0, 0, 0);
+      const daysOverdue = Math.floor((today - due) / (1000 * 60 * 60 * 24));
+
+      if (daysOverdue > 0) {
+        const existingFine = await db('fines').where({ loan_id: loanId }).first();
+        if (!existingFine) {
+          await db('fines').insert({
+            loan_id: loanId,
+            amount: daysOverdue * 10,
+            days_overdue: daysOverdue,
+            status: 'Unpaid',
+          });
+        }
+      }
     }
 
     await logAudit({
@@ -437,7 +478,8 @@ app.get('/api/fines', async (req, res) => {
         'fines.days_overdue as daysOverdue',
         'fines.status',
         'fines.issued_at as issuedAt'
-      );
+      )
+      .orderBy('fines.fine_id', 'desc');
     res.json(fines);
   } catch (err) {
     res.status(500).json({ error: { code: 'INTERNAL', message: err.message } });
