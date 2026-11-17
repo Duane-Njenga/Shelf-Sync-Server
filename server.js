@@ -7,7 +7,7 @@ import { db } from './src/db.js';
 import { logAudit } from './src/utils/audit.js';
 
 import authRouter from './src/routes/auth_routes.js';
-import booksRouter from './src/routes/book_routes.js';
+import booksRouter from './src/routes/books_routes.js';
 import mpesaRouter from './src/routes/mpesa_routes.js';
 
 dotenv.config();
@@ -15,12 +15,10 @@ dotenv.config();
 const app = express();
 const isProd = process.env.NODE_ENV === 'production';
 
-// Trust Render/Cloud reverse proxy so secure cookies work
 if (isProd) {
   app.set('trust proxy', 1);
 }
 
-// Allow Vercel frontend to send session cookies
 app.use(
   cors({
     origin: process.env.CLIENT_URL || 'http://localhost:3000',
@@ -525,13 +523,31 @@ app.get('/api/users', async (req, res) => {
   }
 });
 
+// ONLY Admins can change user roles
 app.patch('/api/users/:id/role', async (req, res) => {
   try {
+    const currentUserId = req.session.userId;
+    if (!currentUserId) {
+      return res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Not logged in' } });
+    }
+
+    const currentUser = await db('users')
+      .join('roles', 'users.role_id', 'roles.role_id')
+      .where('users.user_id', currentUserId)
+      .select('roles.role_name as roleName')
+      .first();
+
+    if (!currentUser || currentUser.roleName !== 'Admin') {
+      return res.status(403).json({
+        error: { code: 'FORBIDDEN', message: 'Only Admins are permitted to change user roles.' },
+      });
+    }
+
     const { roleId } = req.body;
     await db('users').where({ user_id: req.params.id }).update({ role_id: roleId });
 
     await logAudit({
-      userId: req.session.userId,
+      userId: currentUserId,
       action: 'ROLE_UPDATED',
       tableAffected: 'users',
       recordId: Number(req.params.id),
@@ -545,6 +561,7 @@ app.patch('/api/users/:id/role', async (req, res) => {
   }
 });
 
+// Dynamic column mapping for Aiven MySQL compatibility
 app.get('/api/audit-logs', async (req, res) => {
   try {
     const logs = await db('audit_logs')
@@ -573,7 +590,7 @@ app.get('/api/reports', async (req, res) => {
     const popularBooks = await db('loans')
       .join('book_copies', 'loans.copy_id', 'book_copies.copy_id')
       .join('books', 'book_copies.book_id', 'books.book_id')
-      .groupBy('books.book_id')
+      .groupBy('books.book_id', 'books.title')
       .select('books.title', db.raw('COUNT(loans.loan_id) as loanCount'))
       .orderBy('loanCount', 'desc')
       .limit(5);
@@ -584,6 +601,7 @@ app.get('/api/reports', async (req, res) => {
 
     res.json({ popularBooks, loansByStatus });
   } catch (err) {
+    console.error('GET /api/reports error:', err);
     res.status(500).json({ error: { code: 'INTERNAL', message: err.message } });
   }
 });
